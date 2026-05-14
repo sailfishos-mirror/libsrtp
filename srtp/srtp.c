@@ -3481,6 +3481,30 @@ static srtp_err_status_t is_update_policy_compatable(srtp_stream_t stream,
     return srtp_err_status_ok;
 }
 
+static srtp_err_status_t is_update_template_direction_compatible(
+    srtp_stream_t stream_template,
+    const srtp_policy_t policy)
+{
+    switch (policy->ssrc.type) {
+    case (ssrc_any_outbound):
+        if (stream_template->direction != dir_srtp_sender) {
+            return srtp_err_status_bad_param;
+        }
+        break;
+    case (ssrc_any_inbound):
+        if (stream_template->direction != dir_srtp_receiver) {
+            return srtp_err_status_bad_param;
+        }
+        break;
+    case (ssrc_specific):
+    case (ssrc_undefined):
+    default:
+        return srtp_err_status_bad_param;
+    }
+
+    return srtp_err_status_ok;
+}
+
 static srtp_err_status_t update_template_streams(srtp_t session,
                                                  const srtp_policy_t policy)
 {
@@ -3497,6 +3521,12 @@ static srtp_err_status_t update_template_streams(srtp_t session,
         return status;
     }
 
+    status = is_update_template_direction_compatible(session->stream_template,
+                                                     policy);
+    if (status != srtp_err_status_ok) {
+        return status;
+    }
+
     /* allocate new template stream  */
     status = srtp_stream_alloc(&new_stream_template, policy);
     if (status) {
@@ -3509,6 +3539,7 @@ static srtp_err_status_t update_template_streams(srtp_t session,
         srtp_crypto_free(new_stream_template);
         return status;
     }
+    new_stream_template->direction = session->stream_template->direction;
 
     /* allocate new stream list */
     status = srtp_stream_list_alloc(&new_stream_list);
@@ -3549,6 +3580,7 @@ static srtp_err_status_t stream_update(srtp_t session,
     srtp_err_status_t status;
     srtp_xtd_seq_num_t old_index;
     srtp_rdb_t old_rtcp_rdb;
+    direction_t old_direction;
     srtp_stream_t stream;
 
     stream = srtp_get_stream(session, htonl(policy->ssrc.value));
@@ -3564,6 +3596,7 @@ static srtp_err_status_t stream_update(srtp_t session,
     /* save old extendard seq */
     old_index = stream->rtp_rdbx.index;
     old_rtcp_rdb = stream->rtcp_rdb;
+    old_direction = stream->direction;
 
     status = srtp_stream_remove(session, policy->ssrc.value);
     if (status) {
@@ -3583,6 +3616,7 @@ static srtp_err_status_t stream_update(srtp_t session,
     /* restore old extended seq */
     stream->rtp_rdbx.index = old_index;
     stream->rtcp_rdb = old_rtcp_rdb;
+    stream->direction = old_direction;
 
     return srtp_err_status_ok;
 }
