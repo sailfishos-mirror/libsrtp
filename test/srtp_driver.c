@@ -4872,7 +4872,9 @@ srtp_err_status_t srtp_test_template_inbound_direction(void)
     srtp_policy_t policy;
     srtp_t inbound_session;
     uint8_t *rtp;
+    uint8_t *rtcp;
     size_t rtp_len;
+    size_t rtcp_len;
 
     CHECK_OK(srtp_policy_create(&policy));
     CHECK_OK(srtp_policy_set_profile(policy, srtp_profile_aes128_cm_sha1_80));
@@ -4890,6 +4892,14 @@ srtp_err_status_t srtp_test_template_inbound_direction(void)
                  srtp_err_status_no_ctx);
     free(rtp);
 
+    rtcp = create_rtcp_test_packet(32, ssrc, &rtcp_len, NULL);
+    if (rtcp == NULL) {
+        return srtp_err_status_alloc_fail;
+    }
+    CHECK_RETURN(call_srtp_protect_rtcp(inbound_session, rtcp, &rtcp_len, 0),
+                 srtp_err_status_no_ctx);
+    free(rtcp);
+
     CHECK_OK(srtp_dealloc(inbound_session));
     srtp_policy_destroy(policy);
 
@@ -4903,7 +4913,9 @@ srtp_err_status_t srtp_test_template_outbound_direction(void)
     srtp_t outbound_session;
     srtp_t sender_session;
     uint8_t *rtp;
+    uint8_t *rtcp;
     size_t rtp_len;
+    size_t rtcp_len;
 
     CHECK_OK(srtp_policy_create(&policy));
     CHECK_OK(srtp_policy_set_profile(policy, srtp_profile_aes128_cm_sha1_80));
@@ -4923,6 +4935,16 @@ srtp_err_status_t srtp_test_template_outbound_direction(void)
     CHECK_RETURN(call_srtp_unprotect(outbound_session, rtp, &rtp_len),
                  srtp_err_status_no_ctx);
     free(rtp);
+
+    rtcp = create_rtcp_test_packet(32, ssrc, &rtcp_len, NULL);
+    if (rtcp == NULL) {
+        return srtp_err_status_alloc_fail;
+    }
+    CHECK_OK(call_srtp_protect_rtcp(sender_session, rtcp, &rtcp_len, 0));
+
+    CHECK_RETURN(call_srtp_unprotect_rtcp(outbound_session, rtcp, &rtcp_len),
+                 srtp_err_status_no_ctx);
+    free(rtcp);
 
     CHECK_OK(srtp_dealloc(sender_session));
     CHECK_OK(srtp_dealloc(outbound_session));
