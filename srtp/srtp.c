@@ -2406,21 +2406,12 @@ static srtp_err_status_t srtp_unprotect_aead(srtp_ctx_t *ctx,
     }
 
     /*
-     * verify that stream is for received traffic - this check will
-     * detect SSRC collisions, since a stream that appears in both
-     * srtp_protect() and srtp_unprotect() will fail this test in one of
-     * those functions.
-     *
      * we do this check *after* the authentication check, so that the
      * latter check will catch any attempts to fool us into thinking
      * that we've got a collision
      */
-    if (stream->direction != dir_srtp_receiver) {
-        if (stream->direction == dir_unknown) {
-            stream->direction = dir_srtp_receiver;
-        } else {
-            srtp_handle_event(ctx, stream, event_ssrc_collision);
-        }
+    if (stream->direction == dir_unknown) {
+        stream->direction = dir_srtp_receiver;
     }
 
     /*
@@ -2560,6 +2551,7 @@ srtp_err_status_t srtp_protect(srtp_t ctx,
             stream->direction = dir_srtp_sender;
         } else {
             srtp_handle_event(ctx, stream, event_ssrc_collision);
+            return srtp_err_status_direction_mismatch;
         }
     }
 
@@ -2873,6 +2865,18 @@ srtp_err_status_t srtp_unprotect(srtp_t ctx,
             return srtp_err_status_no_ctx;
         }
     } else {
+        /*
+         * Verify that stream is for received traffic - this check will
+         * detect SSRC collisions, since a stream that appears in both
+         * srtp_protect() and srtp_unprotect() will fail this test in one of
+         * those functions.
+         *
+         */
+        if (stream->direction == dir_srtp_sender) {
+            srtp_handle_event(ctx, stream, event_ssrc_collision);
+            return srtp_err_status_direction_mismatch;
+        }
+
         status = srtp_get_est_pkt_index(hdr, stream, &est, &delta);
 
         if (status && (status != srtp_err_status_pkt_idx_adv)) {
@@ -3098,21 +3102,12 @@ srtp_err_status_t srtp_unprotect(srtp_t ctx,
     }
 
     /*
-     * verify that stream is for received traffic - this check will
-     * detect SSRC collisions, since a stream that appears in both
-     * srtp_protect() and srtp_unprotect() will fail this test in one of
-     * those functions.
-     *
      * we do this check *after* the authentication check, so that the
      * latter check will catch any attempts to fool us into thinking
      * that we've got a collision
      */
-    if (stream->direction != dir_srtp_receiver) {
-        if (stream->direction == dir_unknown) {
-            stream->direction = dir_srtp_receiver;
-        } else {
-            srtp_handle_event(ctx, stream, event_ssrc_collision);
-        }
+    if (stream->direction == dir_unknown) {
+        stream->direction = dir_srtp_receiver;
     }
 
     /*
@@ -4009,21 +4004,12 @@ static srtp_err_status_t srtp_unprotect_rtcp_aead(
     *rtcp_len -= (tag_len + sizeof(srtcp_trailer_t) + stream->mki_size);
 
     /*
-     * verify that stream is for received traffic - this check will
-     * detect SSRC collisions, since a stream that appears in both
-     * srtp_protect() and srtp_unprotect() will fail this test in one of
-     * those functions.
-     *
      * we do this check *after* the authentication check, so that the
      * latter check will catch any attempts to fool us into thinking
      * that we've got a collision
      */
-    if (stream->direction != dir_srtp_receiver) {
-        if (stream->direction == dir_unknown) {
-            stream->direction = dir_srtp_receiver;
-        } else {
-            srtp_handle_event(ctx, stream, event_ssrc_collision);
-        }
+    if (stream->direction == dir_unknown) {
+        stream->direction = dir_srtp_receiver;
     }
 
     /*
@@ -4139,6 +4125,7 @@ srtp_err_status_t srtp_protect_rtcp(srtp_t ctx,
             stream->direction = dir_srtp_sender;
         } else {
             srtp_handle_event(ctx, stream, event_ssrc_collision);
+            return srtp_err_status_direction_mismatch;
         }
     }
 
@@ -4369,6 +4356,17 @@ srtp_err_status_t srtp_unprotect_rtcp(srtp_t ctx,
     }
 
     /*
+     * verify that stream is for received traffic - this check will
+     * detect SSRC collisions, since a stream that appears in both
+     * srtp_protect() and srtp_unprotect() will fail this test in one of
+     * those functions.
+     */
+    if (stream->direction == dir_srtp_sender) {
+        srtp_handle_event(ctx, stream, event_ssrc_collision);
+        return srtp_err_status_direction_mismatch;
+    }
+
+    /*
      * Determine if MKI is being used and what session keys should be used
      */
     status = srtp_get_session_keys_for_rtcp_packet(stream, srtcp, srtcp_len,
@@ -4547,21 +4545,12 @@ srtp_err_status_t srtp_unprotect_rtcp(srtp_t ctx,
     *rtcp_len -= stream->mki_size;
 
     /*
-     * verify that stream is for received traffic - this check will
-     * detect SSRC collisions, since a stream that appears in both
-     * srtp_protect() and srtp_unprotect() will fail this test in one of
-     * those functions.
-     *
      * we do this check *after* the authentication check, so that the
      * latter check will catch any attempts to fool us into thinking
      * that we've got a collision
      */
-    if (stream->direction != dir_srtp_receiver) {
-        if (stream->direction == dir_unknown) {
-            stream->direction = dir_srtp_receiver;
-        } else {
-            srtp_handle_event(ctx, stream, event_ssrc_collision);
-        }
+    if (stream->direction == dir_unknown) {
+        stream->direction = dir_srtp_receiver;
     }
 
     /*
