@@ -1759,7 +1759,8 @@ srtp_err_status_t srtp_get_stream_roc(srtp_t session,
  * @param enable whether to enable sending and receiving cryptex.
  *
  * @returns srtp_err_status_ok on success, or srtp_err_status_bad_param if the
- * stream or template cannot be found for the given SSRC.
+ * stream or template cannot be found for the given SSRC or if enabling cryptex
+ * would conflict with encrypted header extensions configured on the stream.
  */
 srtp_err_status_t srtp_set_stream_use_cryptex(srtp_t session,
                                               const srtp_ssrc_t *ssrc,
