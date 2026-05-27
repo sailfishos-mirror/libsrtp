@@ -117,6 +117,8 @@ srtp_err_status_t srtp_test_cryptex_disable(void);
 
 srtp_err_status_t srtp_test_require_cryptex(void);
 
+srtp_err_status_t srtp_test_cryptex_and_enc_xtn_hdr_invalid(void);
+
 double srtp_bits_per_second(int msg_len_octets, const srtp_policy_t *policy);
 
 double srtp_rejections_per_second(int msg_len_octets,
@@ -689,6 +691,14 @@ int main(int argc, char *argv[])
 
         printf("testing require_cryptex()...");
         if (srtp_test_require_cryptex() == srtp_err_status_ok) {
+            printf("passed\n");
+        } else {
+            printf("failed\n");
+            exit(1);
+        }
+
+        printf("testing cryptex_and_enc_xtn_hdr_invalid()...");
+        if (srtp_test_cryptex_and_enc_xtn_hdr_invalid() == srtp_err_status_ok) {
             printf("passed\n");
         } else {
             printf("failed\n");
@@ -2754,6 +2764,42 @@ srtp_err_status_t srtp_test_require_cryptex(void)
     CHECK_OK(srtp_dealloc(srtp_snd));
     CHECK_OK(srtp_dealloc(srtp_recv));
     free(packet);
+
+    return srtp_err_status_ok;
+}
+
+srtp_err_status_t srtp_test_cryptex_and_enc_xtn_hdr_invalid(void)
+{
+    int headers[] = { 1 };
+
+    srtp_policy_t policy;
+    memset(&policy, 0, sizeof(policy));
+    srtp_crypto_policy_set_rtp_default(&policy.rtp);
+    srtp_crypto_policy_set_rtcp_default(&policy.rtcp);
+    policy.ssrc.type = ssrc_specific;
+    policy.ssrc.value = 0xcafebabe;
+    policy.key = test_key;
+    policy.window_size = 128;
+    policy.allow_repeat_tx = 0;
+    policy.enc_xtn_hdr = headers;
+    policy.enc_xtn_hdr_count = sizeof(headers) / sizeof(headers[0]);
+    policy.next = NULL;
+
+    srtp_t srtp_snd;
+    CHECK_OK(srtp_create(&srtp_snd, &policy));
+    CHECK_RETURN(srtp_set_stream_use_cryptex(srtp_snd, &policy.ssrc, 1),
+                 srtp_err_status_bad_param);
+    /* disabling is still allowed */
+    CHECK_OK(srtp_set_stream_use_cryptex(srtp_snd, &policy.ssrc, 0));
+    CHECK_OK(srtp_dealloc(srtp_snd));
+
+    policy.ssrc.type = ssrc_any_outbound;
+    srtp_t srtp_snd_wildcard;
+    CHECK_OK(srtp_create(&srtp_snd_wildcard, &policy));
+    CHECK_RETURN(
+        srtp_set_stream_use_cryptex(srtp_snd_wildcard, &policy.ssrc, 1),
+        srtp_err_status_bad_param);
+    CHECK_OK(srtp_dealloc(srtp_snd_wildcard));
 
     return srtp_err_status_ok;
 }

@@ -5155,6 +5155,9 @@ srtp_err_status_t srtp_set_stream_use_cryptex(srtp_t session,
         if (stream == NULL) {
             return srtp_err_status_bad_param;
         }
+        if (enable && stream->enc_xtn_hdr_count > 0) {
+            return srtp_err_status_bad_param;
+        }
         stream->use_cryptex = enable != 0;
         break;
     case ssrc_any_inbound:
@@ -5162,6 +5165,9 @@ srtp_err_status_t srtp_set_stream_use_cryptex(srtp_t session,
         struct set_cryptex_from_template_data data;
 
         if (session->stream_template == NULL) {
+            return srtp_err_status_bad_param;
+        }
+        if (enable && session->stream_template->enc_xtn_hdr_count > 0) {
             return srtp_err_status_bad_param;
         }
         session->stream_template->use_cryptex = enable != 0;
