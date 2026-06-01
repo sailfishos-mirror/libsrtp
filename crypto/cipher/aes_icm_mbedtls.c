@@ -45,7 +45,14 @@
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif
+/* build_info.h was added in mbedtls 3.0; mbedtls 2.x ships version.h only.
+ * Use __has_include so the gate still resolves on 2.x (the legacy code path).
+ */
+#if defined(__has_include) && __has_include(<mbedtls/build_info.h>)
 #include <mbedtls/build_info.h>
+#else
+#include <mbedtls/version.h>
+#endif
 #if MBEDTLS_VERSION_MAJOR >= 4
 #include <psa/crypto_types.h>
 #include <psa/crypto.h>
@@ -309,8 +316,8 @@ static srtp_err_status_t srtp_aes_icm_mbedtls_context_init(void *cv,
             c->ctx->key_id = PSA_KEY_ID_NULL;
         }
 
-        status = psa_import_key(&attr, key, key_size_in_bits / 8,
-                                &(c->ctx->key_id));
+        status =
+            psa_import_key(&attr, key, key_size_in_bits / 8, &(c->ctx->key_id));
         if (status != PSA_SUCCESS) {
             debug_print(srtp_mod_aes_icm, "psa_import_key failed: %d", status);
             return srtp_err_status_init_fail;
@@ -358,11 +365,11 @@ static srtp_err_status_t srtp_aes_icm_mbedtls_set_iv(
         psa_cipher_abort(&c->ctx->op);
         c->ctx->op = psa_cipher_operation_init();
 
-        status = psa_cipher_encrypt_setup(&c->ctx->op, c->ctx->key_id,
-                                          PSA_ALG_CTR);
+        status =
+            psa_cipher_encrypt_setup(&c->ctx->op, c->ctx->key_id, PSA_ALG_CTR);
         if (status != PSA_SUCCESS) {
-            debug_print(srtp_mod_aes_icm,
-                        "psa_cipher_encrypt_setup failed: %d", status);
+            debug_print(srtp_mod_aes_icm, "psa_cipher_encrypt_setup failed: %d",
+                        status);
             psa_cipher_abort(&c->ctx->op);
             return srtp_err_status_cipher_fail;
         }

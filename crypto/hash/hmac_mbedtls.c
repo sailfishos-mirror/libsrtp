@@ -49,7 +49,14 @@
 #include "alloc.h"
 #include "err.h" /* for srtp_debug */
 #include "auth_test_cases.h"
+/* build_info.h was added in mbedtls 3.0; mbedtls 2.x ships version.h only.
+ * Use __has_include so the gate still resolves on 2.x (the legacy code path).
+ */
+#if defined(__has_include) && __has_include(<mbedtls/build_info.h>)
 #include <mbedtls/build_info.h>
+#else
+#include <mbedtls/version.h>
+#endif
 #if MBEDTLS_VERSION_MAJOR >= 4
 #include <psa/crypto.h>
 
@@ -198,9 +205,8 @@ static srtp_err_status_t srtp_hmac_mbedtls_init(void *statev,
      * SIGN_MESSAGE was added in 1.1 as a superset. Set both so the import
      * works on PSA 1.0 drivers (TF-M secure-image builds) as well as on
      * mainline mbedTLS 4. */
-    psa_set_key_usage_flags(&attr,
-                            PSA_KEY_USAGE_SIGN_HASH |
-                                PSA_KEY_USAGE_SIGN_MESSAGE);
+    psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_SIGN_HASH |
+                                       PSA_KEY_USAGE_SIGN_MESSAGE);
     psa_set_key_algorithm(&attr, PSA_ALG_HMAC(PSA_ALG_SHA_1));
 
     if (state->key_id != PSA_KEY_ID_NULL) {
@@ -214,7 +220,8 @@ static srtp_err_status_t srtp_hmac_mbedtls_init(void *statev,
         return srtp_err_status_auth_fail;
     }
 
-    /* Prime the operation so update()/finish() can be called without start(). */
+    /* Prime the operation so update()/finish() can be called without start().
+     */
     psa_mac_abort(&state->op);
     state->op = psa_mac_operation_init();
     status = psa_mac_sign_setup(&state->op, state->key_id,

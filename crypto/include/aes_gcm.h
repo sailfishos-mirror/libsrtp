@@ -66,7 +66,14 @@ typedef struct {
 
 #ifdef MBEDTLS
 #define MAX_AD_SIZE 2048
+/* build_info.h was added in mbedtls 3.0; mbedtls 2.x ships version.h only.
+ * Use __has_include so the gate still resolves on 2.x (the legacy code path).
+ */
+#if defined(__has_include) && __has_include(<mbedtls/build_info.h>)
 #include <mbedtls/build_info.h>
+#else
+#include <mbedtls/version.h>
+#endif
 
 #if MBEDTLS_VERSION_MAJOR >= 4
 #include <psa/crypto.h>

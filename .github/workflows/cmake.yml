@@ -62,14 +62,18 @@ jobs:
       if:  matrix.os == 'ubuntu-latest' && matrix.crypto == 'mbedtls4'
       run: |
         python3 -m pip install --break-system-packages --upgrade jsonschema jinja2
-        git clone https://github.com/Mbed-TLS/mbedtls.git mbedtls4-src
-        cd mbedtls4-src
+        git clone https://github.com/Mbed-TLS/mbedtls.git /tmp/mbedtls4-src
+        cd /tmp/mbedtls4-src
         git checkout mbedtls-4.0.0
         git submodule update --init --recursive
-        cmake -S . -B build -DENABLE_TESTING=OFF -DENABLE_PROGRAMS=OFF
+        # PIC is required to link the static libtfpsacrypto into libsrtp2's
+        # shared library; without it the final shared link fails with
+        # "relocation R_X86_64_PC32 ... can not be used when making a shared
+        # object; recompile with -fPIC".
+        cmake -S . -B build -DENABLE_TESTING=OFF -DENABLE_PROGRAMS=OFF \
+              -DCMAKE_POSITION_INDEPENDENT_CODE=ON
         cmake --build build -j
         sudo cmake --install build
-        cd ..
 
     - name: Setup macOS OpenSSL
       if: matrix.os == 'macos-latest' && matrix.crypto == 'openssl'
@@ -94,16 +98,20 @@ jobs:
     - name: Setup macOS MbedTLS 4
       if:  matrix.os == 'macos-latest' && matrix.crypto == 'mbedtls4'
       run: |
+        # Install under /tmp/ (outside $GITHUB_WORKSPACE) so the install
+        # survives the actions/checkout@v2 step that runs later in this job
+        # and clears the workspace.
         python3 -m pip install --break-system-packages --upgrade jsonschema jinja2
-        git clone https://github.com/Mbed-TLS/mbedtls.git mbedtls4-src
-        cd mbedtls4-src
+        git clone https://github.com/Mbed-TLS/mbedtls.git /tmp/mbedtls4-src
+        cd /tmp/mbedtls4-src
         git checkout mbedtls-4.0.0
         git submodule update --init --recursive
-        cmake -S . -B build -DENABLE_TESTING=OFF -DENABLE_PROGRAMS=OFF -DCMAKE_INSTALL_PREFIX="$GITHUB_WORKSPACE/mbedtls4-prefix"
+        cmake -S . -B build -DENABLE_TESTING=OFF -DENABLE_PROGRAMS=OFF \
+              -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+              -DCMAKE_INSTALL_PREFIX=/tmp/mbedtls4-prefix
         cmake --build build -j
         cmake --install build
-        echo "CMAKE_PREFIX_PATH=$GITHUB_WORKSPACE/mbedtls4-prefix" >> $GITHUB_ENV
-        cd ..
+        echo "CMAKE_PREFIX_PATH=/tmp/mbedtls4-prefix" >> $GITHUB_ENV
 
     - uses: actions/checkout@v2
 
