@@ -65,6 +65,27 @@ typedef struct {
 
 #ifdef MBEDTLS
 
+#include <mbedtls/build_info.h>
+
+#if MBEDTLS_VERSION_MAJOR >= 4
+#include <psa/crypto.h>
+
+typedef struct {
+    psa_key_id_t key_id;
+    psa_cipher_operation_t op;
+} psa_aes_icm_ctx_t;
+
+typedef struct {
+    v128_t counter; /* holds the counter value          */
+    v128_t offset;  /* initial offset value             */
+    v128_t stream_block;
+    size_t nc_off;
+    int key_size;
+    psa_aes_icm_ctx_t *ctx;
+} srtp_aes_icm_ctx_t;
+
+#else /* MBEDTLS_VERSION_MAJOR >= 4 */
+
 #include <mbedtls/aes.h>
 typedef struct {
     v128_t counter; /* holds the counter value          */
@@ -74,6 +95,8 @@ typedef struct {
     int key_size;
     mbedtls_aes_context *ctx;
 } srtp_aes_icm_ctx_t;
+
+#endif /* MBEDTLS_VERSION_MAJOR >= 4 */
 
 #endif /* MBEDTLS */
 
