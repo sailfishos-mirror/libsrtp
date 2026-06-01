@@ -289,6 +289,13 @@ static srtp_err_status_t srtp_aes_icm_mbedtls_context_init(void *cv,
         psa_set_key_bits(&attr, key_size_in_bits);
         psa_set_key_usage_flags(&attr,
                                 PSA_KEY_USAGE_ENCRYPT | PSA_KEY_USAGE_DECRYPT);
+        /* SRTP AES-ICM spec only allows the low 16 bits of the counter to
+         * vary per packet (top 14 bytes are the salted nonce, see RFC 3711).
+         * PSA_ALG_CTR increments the full 128-bit counter, identical to the
+         * legacy mbedtls_aes_crypt_ctr path. For SRTP packet sizes
+         * (< 2^16 blocks = 1 MiB) the keystreams agree, so all conformant
+         * RTP/RTCP payloads are correct. Buffers > 1 MiB are not
+         * SRTP-conformant on either backend. */
         psa_set_key_algorithm(&attr, PSA_ALG_CTR);
 
         if (c->ctx->key_id != PSA_KEY_ID_NULL) {

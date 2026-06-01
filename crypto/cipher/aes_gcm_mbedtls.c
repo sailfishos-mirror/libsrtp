@@ -350,7 +350,11 @@ static srtp_err_status_t srtp_aes_gcm_mbedtls_encrypt(void *cv,
     FUNC_ENTRY();
     srtp_aes_gcm_ctx_t *c = (srtp_aes_gcm_ctx_t *)cv;
 
-    if (c->dir != srtp_direction_encrypt && c->dir != srtp_direction_decrypt) {
+    /* Require dir == encrypt to catch cross-call bugs (caller passing a
+     * decrypt-configured ctx into the encrypt entry point). PSA does not
+     * catch this on its own since the imported key has both ENCRYPT and
+     * DECRYPT usage flags. */
+    if (c->dir != srtp_direction_encrypt) {
         return (srtp_err_status_bad_param);
     }
 
@@ -462,7 +466,7 @@ static srtp_err_status_t srtp_aes_gcm_mbedtls_encrypt(void *cv,
     enc_fail:
         psa_aead_abort(&op);
         c->aad_size = 0;
-        return srtp_err_status_bad_param;
+        return srtp_err_status_cipher_fail;
     }
 #else
     {
@@ -519,7 +523,9 @@ static srtp_err_status_t srtp_aes_gcm_mbedtls_decrypt(void *cv,
     FUNC_ENTRY();
     srtp_aes_gcm_ctx_t *c = (srtp_aes_gcm_ctx_t *)cv;
 
-    if (c->dir != srtp_direction_encrypt && c->dir != srtp_direction_decrypt) {
+    /* Require dir == decrypt to catch cross-call bugs (see encrypt for
+     * rationale). */
+    if (c->dir != srtp_direction_decrypt) {
         return (srtp_err_status_bad_param);
     }
 
