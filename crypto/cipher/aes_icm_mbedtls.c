@@ -408,37 +408,52 @@ static srtp_err_status_t srtp_aes_icm_mbedtls_encrypt(void *cv,
 #if MBEDTLS_VERSION_MAJOR >= 4
     {
         psa_status_t status;
-        size_t out_len = 0;
 
         /*
          * libsrtp's AES-ICM interface is incremental: encrypt() may be called
-         * multiple times after a single set_iv().  psa_cipher_update can be
-         * called repeatedly on the same operation handle to match that
-         * semantics; psa_cipher_finish is only invoked at dealloc/set_iv-reset
-         * time via psa_cipher_abort.  In-place src==dst is supported by PSA.
+         * multiple times after a single set_iv().  psa_cipher_update is called
+         * repeatedly on the same operation handle to match that; the operation
+         * is only finished at dealloc/set_iv-reset time via psa_cipher_abort.
+         *
+         * SRTP always encrypts in place (input buffer == output buffer). The
+         * PSA spec permits overlapping in/out buffers, but TF-PSA-Crypto (the
+         * crypto backend shipped with ESP-IDF v6 / mbedTLS 4) rejects an
+         * in-place psa_cipher_update for AES-CTR on non-block-aligned lengths
+         * with PSA_ERROR_INVALID_ARGUMENT. Stage through a bounded stack buffer
+         * to keep input and output non-overlapping. AES-CTR is a stream cipher
+         * (out_len == in_len, no deferred bytes), so processing in fixed-size,
+         * block-aligned chunks preserves the keystream position across calls.
          */
-        status = psa_cipher_update(&c->ctx->op, buf, *enc_len, buf, *enc_len,
-                                   &out_len);
-        if (status != PSA_SUCCESS) {
-            debug_print(srtp_mod_aes_icm, "psa_cipher_update failed: %d",
-                        status);
-            psa_cipher_abort(&c->ctx->op);
-            return srtp_err_status_cipher_fail;
-        }
-        /* Mainline mbedTLS PSA implements CTR as a stream cipher and returns
-         * out_len == in_len, but the PSA spec lets a backend defer bytes to
-         * psa_cipher_finish. libsrtp's set_iv-then-encrypt model has no
-         * finish() call between packets, so a deferring backend would leak
-         * partial output. If this ever fires in the wild, the proper fix is
-         * to call psa_cipher_finish() and accumulate; until then, log and
-         * fail loudly so we notice rather than silently corrupting data. */
-        if (out_len != *enc_len) {
-            debug_print2(srtp_mod_aes_icm,
-                         "psa_cipher_update short write: %zu of %u "
-                         "(PSA backend defers stream-cipher output; "
-                         "unsupported in this wrapper)",
-                         out_len, *enc_len);
-            return srtp_err_status_cipher_fail;
+        unsigned char scratch[128]; /* block-aligned staging buffer */
+        unsigned int done = 0;
+        while (done < *enc_len) {
+            size_t out_len = 0;
+            size_t chunk = *enc_len - done;
+            if (chunk > sizeof(scratch)) {
+                chunk = sizeof(scratch);
+            }
+            status = psa_cipher_update(&c->ctx->op, buf + done, chunk, scratch,
+                                       sizeof(scratch), &out_len);
+            if (status != PSA_SUCCESS) {
+                debug_print(srtp_mod_aes_icm, "psa_cipher_update failed: %d",
+                            status);
+                psa_cipher_abort(&c->ctx->op);
+                return srtp_err_status_cipher_fail;
+            }
+            /* Stream-cipher invariant: a CTR update never defers bytes. If a
+             * backend ever buffered a partial block, the keystream would
+             * desync across chunks — fail loudly rather than corrupt data. */
+            if (out_len != chunk) {
+                debug_print2(srtp_mod_aes_icm,
+                             "psa_cipher_update short write: %zu of %zu "
+                             "(PSA backend defers stream-cipher output; "
+                             "unsupported in this wrapper)",
+                             out_len, chunk);
+                psa_cipher_abort(&c->ctx->op);
+                return srtp_err_status_cipher_fail;
+            }
+            memcpy(buf + done, scratch, out_len);
+            done += (unsigned int)out_len;
         }
     }
 #else
