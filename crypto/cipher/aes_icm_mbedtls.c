@@ -318,6 +318,8 @@ static srtp_err_status_t srtp_aes_icm_mbedtls_context_init(void *cv,
 
         status =
             psa_import_key(&attr, key, key_size_in_bits / 8, &(c->ctx->key_id));
+        /* Done with the attributes on both success and failure paths. */
+        psa_reset_key_attributes(&attr);
         if (status != PSA_SUCCESS) {
             debug_print(srtp_mod_aes_icm, "psa_import_key failed: %d", status);
             return srtp_err_status_init_fail;

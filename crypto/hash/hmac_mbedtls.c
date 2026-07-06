@@ -312,6 +312,10 @@ static srtp_err_status_t srtp_hmac_mbedtls_compute(void *statev,
         psa_hmac_ctx_t *state = (psa_hmac_ctx_t *)statev;
         size_t out_len = 0;
 
+        if (msg_octets < 0) {
+            return srtp_err_status_bad_param;
+        }
+
         if (psa_mac_update(&state->op, message, (size_t)msg_octets) !=
             PSA_SUCCESS) {
             psa_mac_abort(&state->op);

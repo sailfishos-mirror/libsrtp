@@ -303,6 +303,12 @@ Option                         | Description
 By default there is no log output, logging can be enabled to be output to stdout
 or a given file using the configure options.
 
+> **mbedTLS 4 / PSA note:** When built against mbedTLS 4.x, the mbedTLS backend
+> uses the PSA Crypto API, which keeps keys in a process-wide (shared) key
+> store. If your application drives libSRTP from multiple threads (e.g. separate
+> RX/TX streams), build mbedTLS with `MBEDTLS_THREADING_C` enabled so PSA's key
+> store is accessed safely. mbedTLS 3.x (the default) is unaffected.
+
 This package has been tested on the following platforms: Mac OS X
 (powerpc-apple-darwin1.4), Cygwin (i686-pc-cygwin), Solaris
 (sparc-sun-solaris2.6), RedHat Linux 7.1 and 9 (i686-pc-linux), and

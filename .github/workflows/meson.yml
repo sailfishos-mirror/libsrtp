@@ -81,7 +81,7 @@ jobs:
         python3 -m pip install --break-system-packages --upgrade jsonschema jinja2
         git clone https://github.com/Mbed-TLS/mbedtls.git /tmp/mbedtls4-src
         cd /tmp/mbedtls4-src
-        git checkout mbedtls-4.0.0
+        git checkout mbedtls-4.1.0
         git submodule update --init --recursive
         # PIC: static libtfpsacrypto must be linkable into libsrtp2.so.
         cmake -S . -B build -DENABLE_TESTING=OFF -DENABLE_PROGRAMS=OFF \
@@ -117,7 +117,7 @@ jobs:
         python3 -m pip install --break-system-packages --upgrade jsonschema jinja2
         git clone https://github.com/Mbed-TLS/mbedtls.git /tmp/mbedtls4-src
         cd /tmp/mbedtls4-src
-        git checkout mbedtls-4.0.0
+        git checkout mbedtls-4.1.0
         git submodule update --init --recursive
         cmake -S . -B build -DENABLE_TESTING=OFF -DENABLE_PROGRAMS=OFF \
               -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
