@@ -66,6 +66,37 @@ typedef struct {
 
 #ifdef MBEDTLS
 #define MAX_AD_SIZE 2048
+/* build_info.h was added in mbedtls 3.0; mbedtls 2.x ships version.h only.
+ * Use __has_include so the gate still resolves on 2.x (the legacy code path).
+ */
+#if defined(__has_include) && __has_include(<mbedtls/build_info.h>)
+#include <mbedtls/build_info.h>
+#else
+#include <mbedtls/version.h>
+#endif
+
+#if MBEDTLS_VERSION_MAJOR >= 4
+#include <psa/crypto.h>
+
+typedef struct {
+    psa_key_id_t key_id;
+    psa_aead_operation_t op;
+} psa_aes_gcm_ctx_t;
+
+typedef struct {
+    int key_size;
+    int tag_len;
+    int aad_size;
+    int iv_len;
+    uint8_t iv[12];
+    uint8_t tag[16];
+    uint8_t aad[MAX_AD_SIZE];
+    psa_aes_gcm_ctx_t *ctx;
+    srtp_cipher_direction_t dir;
+} srtp_aes_gcm_ctx_t;
+
+#else /* MBEDTLS_VERSION_MAJOR >= 4 */
+
 #include <mbedtls/aes.h>
 #include <mbedtls/gcm.h>
 
@@ -80,6 +111,8 @@ typedef struct {
     mbedtls_gcm_context *ctx;
     srtp_cipher_direction_t dir;
 } srtp_aes_gcm_ctx_t;
+
+#endif /* MBEDTLS_VERSION_MAJOR >= 4 */
 
 #endif /* MBEDTLS */
 

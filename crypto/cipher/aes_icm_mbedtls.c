@@ -45,7 +45,20 @@
 #ifdef HAVE_CONFIG_H
 #include <config.h>
 #endif
+/* build_info.h was added in mbedtls 3.0; mbedtls 2.x ships version.h only.
+ * Use __has_include so the gate still resolves on 2.x (the legacy code path).
+ */
+#if defined(__has_include) && __has_include(<mbedtls/build_info.h>)
+#include <mbedtls/build_info.h>
+#else
+#include <mbedtls/version.h>
+#endif
+#if MBEDTLS_VERSION_MAJOR >= 4
+#include <psa/crypto_types.h>
+#include <psa/crypto.h>
+#else
 #include <mbedtls/aes.h>
+#endif
 #include "aes_icm_ext.h"
 #include "crypto_types.h"
 #include "err.h" /* for srtp_debug */
@@ -145,6 +158,19 @@ static srtp_err_status_t srtp_aes_icm_mbedtls_alloc(srtp_cipher_t **c,
         return srtp_err_status_alloc_fail;
     }
 
+#if MBEDTLS_VERSION_MAJOR >= 4
+    icm->ctx =
+        (psa_aes_icm_ctx_t *)srtp_crypto_alloc(sizeof(psa_aes_icm_ctx_t));
+    if (icm->ctx == NULL) {
+        srtp_crypto_free(icm);
+        srtp_crypto_free(*c);
+        *c = NULL;
+        return srtp_err_status_alloc_fail;
+    }
+
+    icm->ctx->key_id = PSA_KEY_ID_NULL;
+    icm->ctx->op = psa_cipher_operation_init();
+#else
     icm->ctx =
         (mbedtls_aes_context *)srtp_crypto_alloc(sizeof(mbedtls_aes_context));
     if (icm->ctx == NULL) {
@@ -155,6 +181,7 @@ static srtp_err_status_t srtp_aes_icm_mbedtls_alloc(srtp_cipher_t **c,
     }
 
     mbedtls_aes_init(icm->ctx);
+#endif
 
     /* set pointers */
     (*c)->state = icm;
@@ -200,7 +227,12 @@ static srtp_err_status_t srtp_aes_icm_mbedtls_dealloc(srtp_cipher_t *c)
      */
     ctx = (srtp_aes_icm_ctx_t *)c->state;
     if (ctx != NULL) {
+#if MBEDTLS_VERSION_MAJOR >= 4
+        psa_cipher_abort(&ctx->ctx->op);
+        psa_destroy_key(ctx->ctx->key_id);
+#else
         mbedtls_aes_free(ctx->ctx);
+#endif
         srtp_crypto_free(ctx->ctx);
         /* zeroize the key material */
         octet_string_set_to_zero(ctx, sizeof(srtp_aes_icm_ctx_t));
@@ -218,7 +250,18 @@ static srtp_err_status_t srtp_aes_icm_mbedtls_context_init(void *cv,
 {
     srtp_aes_icm_ctx_t *c = (srtp_aes_icm_ctx_t *)cv;
     uint32_t key_size_in_bits = (c->key_size << 3);
+#if MBEDTLS_VERSION_MAJOR >= 4
+    psa_status_t status = PSA_SUCCESS;
+
+    /* psa_crypto_init() is idempotent and required before any PSA use. */
+    status = psa_crypto_init();
+    if (status != PSA_SUCCESS) {
+        debug_print(srtp_mod_aes_icm, "psa_crypto_init failed: %d", status);
+        return srtp_err_status_init_fail;
+    }
+#else
     int errcode = 0;
+#endif
 
     /*
      * set counter and initial values to 'offset' value, being careful not to
@@ -246,10 +289,48 @@ static srtp_err_status_t srtp_aes_icm_mbedtls_context_init(void *cv,
         break;
     }
 
+#if MBEDTLS_VERSION_MAJOR >= 4
+    {
+        psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
+        psa_set_key_type(&attr, PSA_KEY_TYPE_AES);
+        psa_set_key_bits(&attr, key_size_in_bits);
+        psa_set_key_usage_flags(&attr,
+                                PSA_KEY_USAGE_ENCRYPT | PSA_KEY_USAGE_DECRYPT);
+        /* SRTP AES-ICM spec only allows the low 16 bits of the counter to
+         * vary per packet (top 14 bytes are the salted nonce, see RFC 3711).
+         * PSA_ALG_CTR increments the full 128-bit counter, identical to the
+         * legacy mbedtls_aes_crypt_ctr path. For SRTP packet sizes
+         * (< 2^16 blocks = 1 MiB) the keystreams agree, so all conformant
+         * RTP/RTCP payloads are correct. Buffers > 1 MiB are not
+         * SRTP-conformant on either backend. */
+        psa_set_key_algorithm(&attr, PSA_ALG_CTR);
+
+        if (c->ctx->key_id != PSA_KEY_ID_NULL) {
+            /* Abort any in-flight cipher op before destroying its key:
+             * a leftover op from a prior set_iv() still references key_id,
+             * and on PSA implementations that eagerly invalidate op key
+             * handles, destroy_key would leave the op in a bad state. */
+            psa_cipher_abort(&c->ctx->op);
+            c->ctx->op = psa_cipher_operation_init();
+            psa_destroy_key(c->ctx->key_id);
+            c->ctx->key_id = PSA_KEY_ID_NULL;
+        }
+
+        status =
+            psa_import_key(&attr, key, key_size_in_bits / 8, &(c->ctx->key_id));
+        /* Done with the attributes on both success and failure paths. */
+        psa_reset_key_attributes(&attr);
+        if (status != PSA_SUCCESS) {
+            debug_print(srtp_mod_aes_icm, "psa_import_key failed: %d", status);
+            return srtp_err_status_init_fail;
+        }
+    }
+#else
     errcode = mbedtls_aes_setkey_enc(c->ctx, key, key_size_in_bits);
     if (errcode != 0) {
         debug_print(srtp_mod_aes_icm, "errCode: %d", errcode);
     }
+#endif
 
     return srtp_err_status_ok;
 }
@@ -278,6 +359,33 @@ static srtp_err_status_t srtp_aes_icm_mbedtls_set_iv(
     debug_print(srtp_mod_aes_icm, "set_counter: %s",
                 v128_hex_string(&c->counter));
 
+#if MBEDTLS_VERSION_MAJOR >= 4
+    {
+        psa_status_t status;
+
+        /* Reset any prior in-flight cipher operation. */
+        psa_cipher_abort(&c->ctx->op);
+        c->ctx->op = psa_cipher_operation_init();
+
+        status =
+            psa_cipher_encrypt_setup(&c->ctx->op, c->ctx->key_id, PSA_ALG_CTR);
+        if (status != PSA_SUCCESS) {
+            debug_print(srtp_mod_aes_icm, "psa_cipher_encrypt_setup failed: %d",
+                        status);
+            psa_cipher_abort(&c->ctx->op);
+            return srtp_err_status_cipher_fail;
+        }
+
+        status = psa_cipher_set_iv(&c->ctx->op, c->counter.v8, 16);
+        if (status != PSA_SUCCESS) {
+            debug_print(srtp_mod_aes_icm, "psa_cipher_set_iv failed: %d",
+                        status);
+            psa_cipher_abort(&c->ctx->op);
+            return srtp_err_status_cipher_fail;
+        }
+    }
+#endif
+
     return srtp_err_status_ok;
 }
 
@@ -295,16 +403,70 @@ static srtp_err_status_t srtp_aes_icm_mbedtls_encrypt(void *cv,
 {
     srtp_aes_icm_ctx_t *c = (srtp_aes_icm_ctx_t *)cv;
 
-    int errCode = 0;
     debug_print(srtp_mod_aes_icm, "rs0: %s", v128_hex_string(&c->counter));
 
-    errCode =
-        mbedtls_aes_crypt_ctr(c->ctx, *enc_len, &(c->nc_off), c->counter.v8,
-                              c->stream_block.v8, buf, buf);
-    if (errCode != 0) {
-        debug_print(srtp_mod_aes_icm, "encrypt error: %d", errCode);
-        return srtp_err_status_cipher_fail;
+#if MBEDTLS_VERSION_MAJOR >= 4
+    {
+        psa_status_t status;
+
+        /*
+         * libsrtp's AES-ICM interface is incremental: encrypt() may be called
+         * multiple times after a single set_iv().  psa_cipher_update is called
+         * repeatedly on the same operation handle to match that; the operation
+         * is only finished at dealloc/set_iv-reset time via psa_cipher_abort.
+         *
+         * SRTP always encrypts in place (input buffer == output buffer). The
+         * PSA spec permits overlapping in/out buffers, but TF-PSA-Crypto (the
+         * crypto backend shipped with ESP-IDF v6 / mbedTLS 4) rejects an
+         * in-place psa_cipher_update for AES-CTR on non-block-aligned lengths
+         * with PSA_ERROR_INVALID_ARGUMENT. Stage through a bounded stack buffer
+         * to keep input and output non-overlapping. AES-CTR is a stream cipher
+         * (out_len == in_len, no deferred bytes), so processing in fixed-size,
+         * block-aligned chunks preserves the keystream position across calls.
+         */
+        unsigned char scratch[128]; /* block-aligned staging buffer */
+        unsigned int done = 0;
+        while (done < *enc_len) {
+            size_t out_len = 0;
+            size_t chunk = *enc_len - done;
+            if (chunk > sizeof(scratch)) {
+                chunk = sizeof(scratch);
+            }
+            status = psa_cipher_update(&c->ctx->op, buf + done, chunk, scratch,
+                                       sizeof(scratch), &out_len);
+            if (status != PSA_SUCCESS) {
+                debug_print(srtp_mod_aes_icm, "psa_cipher_update failed: %d",
+                            status);
+                psa_cipher_abort(&c->ctx->op);
+                return srtp_err_status_cipher_fail;
+            }
+            /* Stream-cipher invariant: a CTR update never defers bytes. If a
+             * backend ever buffered a partial block, the keystream would
+             * desync across chunks — fail loudly rather than corrupt data. */
+            if (out_len != chunk) {
+                debug_print2(srtp_mod_aes_icm,
+                             "psa_cipher_update short write: %zu of %zu "
+                             "(PSA backend defers stream-cipher output; "
+                             "unsupported in this wrapper)",
+                             out_len, chunk);
+                psa_cipher_abort(&c->ctx->op);
+                return srtp_err_status_cipher_fail;
+            }
+            memcpy(buf + done, scratch, out_len);
+            done += (unsigned int)out_len;
+        }
     }
+#else
+    {
+        int errCode =
+            mbedtls_aes_crypt_ctr(c->ctx, *enc_len, &(c->nc_off), c->counter.v8,
+                                  c->stream_block.v8, buf, buf);
+        if (errCode != 0) {
+            debug_print(srtp_mod_aes_icm, "encrypt error: %d", errCode);
+            return srtp_err_status_cipher_fail;
+        }
+    }
+#endif
 
     return srtp_err_status_ok;
 }

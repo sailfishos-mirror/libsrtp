@@ -159,6 +159,14 @@ elif crypto_library == 'mbedtls'
     mbedtls_dep = cc.find_library('mbedcrypto', has_headers: ['mbedtls/aes.h'], required: true)
   endif
   srtp2_deps += [mbedtls_dep]
+  # mbedTLS 4.x ships the PSA Crypto implementation as a separate library
+  # (libtfpsacrypto); libmbedcrypto on 4.x is a thin wrapper that does not
+  # contain the psa_* symbols.  Link it when present; older 3.x installs
+  # simply won't have it and this is a no-op.
+  mbedtls_psa_dep = cc.find_library('tfpsacrypto', required: false)
+  if mbedtls_psa_dep.found()
+    srtp2_deps += [mbedtls_psa_dep]
+  endif
   cdata.set('GCM', true)
   cdata.set('MBEDTLS', true)
   cdata.set('USE_EXTERNAL_CRYPTO', true)

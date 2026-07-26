@@ -49,7 +49,24 @@
 #include "alloc.h"
 #include "err.h" /* for srtp_debug */
 #include "auth_test_cases.h"
+/* build_info.h was added in mbedtls 3.0; mbedtls 2.x ships version.h only.
+ * Use __has_include so the gate still resolves on 2.x (the legacy code path).
+ */
+#if defined(__has_include) && __has_include(<mbedtls/build_info.h>)
+#include <mbedtls/build_info.h>
+#else
+#include <mbedtls/version.h>
+#endif
+#if MBEDTLS_VERSION_MAJOR >= 4
+#include <psa/crypto.h>
+
+typedef struct {
+    psa_mac_operation_t op;
+    psa_key_id_t key_id;
+} psa_hmac_ctx_t;
+#else
 #include <mbedtls/md.h>
+#endif
 
 #define SHA1_DIGEST_SIZE 20
 
@@ -80,6 +97,27 @@ static srtp_err_status_t srtp_hmac_mbedtls_alloc(srtp_auth_t **a,
     if (*a == NULL) {
         return srtp_err_status_alloc_fail;
     }
+#if MBEDTLS_VERSION_MAJOR >= 4
+    {
+        psa_hmac_ctx_t *state;
+        psa_status_t status = psa_crypto_init();
+        if (status != PSA_SUCCESS) {
+            debug_print(srtp_mod_hmac, "psa_crypto_init failed: %d", status);
+            srtp_crypto_free(*a);
+            *a = NULL;
+            return srtp_err_status_init_fail;
+        }
+        state = (psa_hmac_ctx_t *)srtp_crypto_alloc(sizeof(psa_hmac_ctx_t));
+        if (state == NULL) {
+            srtp_crypto_free(*a);
+            *a = NULL;
+            return srtp_err_status_alloc_fail;
+        }
+        state->key_id = PSA_KEY_ID_NULL;
+        state->op = psa_mac_operation_init();
+        (*a)->state = state;
+    }
+#else
     // allocate the buffer of mbedtls context.
     (*a)->state = srtp_crypto_alloc(sizeof(mbedtls_md_context_t));
     if ((*a)->state == NULL) {
@@ -88,6 +126,7 @@ static srtp_err_status_t srtp_hmac_mbedtls_alloc(srtp_auth_t **a,
         return srtp_err_status_alloc_fail;
     }
     mbedtls_md_init((mbedtls_md_context_t *)(*a)->state);
+#endif
 
     /* set pointers */
     (*a)->type = &srtp_hmac;
@@ -100,10 +139,19 @@ static srtp_err_status_t srtp_hmac_mbedtls_alloc(srtp_auth_t **a,
 
 static srtp_err_status_t srtp_hmac_mbedtls_dealloc(srtp_auth_t *a)
 {
+#if MBEDTLS_VERSION_MAJOR >= 4
+    psa_hmac_ctx_t *hmac_ctx = (psa_hmac_ctx_t *)a->state;
+    if (hmac_ctx) {
+        psa_mac_abort(&hmac_ctx->op);
+        psa_destroy_key(hmac_ctx->key_id);
+        srtp_crypto_free(hmac_ctx);
+    }
+#else
     mbedtls_md_context_t *hmac_ctx;
     hmac_ctx = (mbedtls_md_context_t *)a->state;
     mbedtls_md_free(hmac_ctx);
     srtp_crypto_free(hmac_ctx);
+#endif
     /* zeroize entire state*/
     octet_string_set_to_zero(a, sizeof(srtp_auth_t));
 
@@ -115,17 +163,81 @@ static srtp_err_status_t srtp_hmac_mbedtls_dealloc(srtp_auth_t *a)
 
 static srtp_err_status_t srtp_hmac_mbedtls_start(void *statev)
 {
+#if MBEDTLS_VERSION_MAJOR >= 4
+    psa_hmac_ctx_t *state = (psa_hmac_ctx_t *)statev;
+    /*
+     * Reset any in-flight MAC operation before re-priming.  psa_mac_abort is
+     * idempotent on a freshly-initialised handle so this is safe on first use.
+     */
+    psa_mac_abort(&state->op);
+    state->op = psa_mac_operation_init();
+
+    if (psa_mac_sign_setup(&state->op, state->key_id,
+                           PSA_ALG_HMAC(PSA_ALG_SHA_1)) != PSA_SUCCESS) {
+        psa_mac_abort(&state->op);
+        return srtp_err_status_auth_fail;
+    }
+    return srtp_err_status_ok;
+#else
     mbedtls_md_context_t *state = (mbedtls_md_context_t *)statev;
     if (mbedtls_md_hmac_reset(state) != 0)
         return srtp_err_status_auth_fail;
 
     return srtp_err_status_ok;
+#endif
 }
 
 static srtp_err_status_t srtp_hmac_mbedtls_init(void *statev,
                                                 const uint8_t *key,
                                                 int key_len)
 {
+#if MBEDTLS_VERSION_MAJOR >= 4
+    psa_hmac_ctx_t *state = (psa_hmac_ctx_t *)statev;
+    psa_status_t status;
+    psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
+
+    if (key_len < 0) {
+        return srtp_err_status_bad_param;
+    }
+
+    psa_set_key_type(&attr, PSA_KEY_TYPE_HMAC);
+    /* SIGN_HASH is the PSA 1.0 baseline accepted by psa_mac_sign_setup;
+     * SIGN_MESSAGE was added in 1.1 as a superset. Set both so the import
+     * works on PSA 1.0 drivers (TF-M secure-image builds) as well as on
+     * mainline mbedTLS 4. */
+    psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_SIGN_HASH |
+                                       PSA_KEY_USAGE_SIGN_MESSAGE);
+    psa_set_key_algorithm(&attr, PSA_ALG_HMAC(PSA_ALG_SHA_1));
+
+    if (state->key_id != PSA_KEY_ID_NULL) {
+        psa_destroy_key(state->key_id);
+        state->key_id = PSA_KEY_ID_NULL;
+    }
+
+    status = psa_import_key(&attr, key, (size_t)key_len, &state->key_id);
+    if (status != PSA_SUCCESS) {
+        debug_print(srtp_mod_hmac, "psa_import_key failed: %d", status);
+        return srtp_err_status_auth_fail;
+    }
+
+    /* Prime the operation so update()/finish() can be called without start().
+     */
+    psa_mac_abort(&state->op);
+    state->op = psa_mac_operation_init();
+    status = psa_mac_sign_setup(&state->op, state->key_id,
+                                PSA_ALG_HMAC(PSA_ALG_SHA_1));
+    if (status != PSA_SUCCESS) {
+        psa_mac_abort(&state->op);
+        /* Free the freshly imported key so we don't leak the slot if the
+         * caller treats auth_fail as fatal and skips dealloc. */
+        psa_destroy_key(state->key_id);
+        state->key_id = PSA_KEY_ID_NULL;
+        debug_print(srtp_mod_hmac, "psa_mac_sign_setup failed: %d", status);
+        return srtp_err_status_auth_fail;
+    }
+
+    return srtp_err_status_ok;
+#else
     mbedtls_md_context_t *state = (mbedtls_md_context_t *)statev;
     const mbedtls_md_info_t *info = NULL;
 
@@ -145,12 +257,30 @@ static srtp_err_status_t srtp_hmac_mbedtls_init(void *statev,
         return srtp_err_status_auth_fail;
 
     return srtp_err_status_ok;
+#endif
 }
 
 static srtp_err_status_t srtp_hmac_mbedtls_update(void *statev,
                                                   const uint8_t *message,
                                                   int msg_octets)
 {
+#if MBEDTLS_VERSION_MAJOR >= 4
+    psa_hmac_ctx_t *state = (psa_hmac_ctx_t *)statev;
+
+    if (msg_octets < 0) {
+        return srtp_err_status_bad_param;
+    }
+
+    debug_print(srtp_mod_hmac, "input: %s",
+                srtp_octet_string_hex_string(message, msg_octets));
+
+    if (psa_mac_update(&state->op, message, (size_t)msg_octets) !=
+        PSA_SUCCESS) {
+        psa_mac_abort(&state->op);
+        return srtp_err_status_auth_fail;
+    }
+    return srtp_err_status_ok;
+#else
     mbedtls_md_context_t *state = (mbedtls_md_context_t *)statev;
 
     debug_print(srtp_mod_hmac, "input: %s",
@@ -160,6 +290,7 @@ static srtp_err_status_t srtp_hmac_mbedtls_update(void *statev,
         return srtp_err_status_auth_fail;
 
     return srtp_err_status_ok;
+#endif
 }
 
 static srtp_err_status_t srtp_hmac_mbedtls_compute(void *statev,
@@ -168,7 +299,6 @@ static srtp_err_status_t srtp_hmac_mbedtls_compute(void *statev,
                                                    int tag_len,
                                                    uint8_t *result)
 {
-    mbedtls_md_context_t *state = (mbedtls_md_context_t *)statev;
     uint8_t hash_value[SHA1_DIGEST_SIZE];
     int i;
 
@@ -177,12 +307,38 @@ static srtp_err_status_t srtp_hmac_mbedtls_compute(void *statev,
         return srtp_err_status_bad_param;
     }
 
-    /* hash message, copy output into H */
-    if (mbedtls_md_hmac_update(statev, message, msg_octets) != 0)
-        return srtp_err_status_auth_fail;
+#if MBEDTLS_VERSION_MAJOR >= 4
+    {
+        psa_hmac_ctx_t *state = (psa_hmac_ctx_t *)statev;
+        size_t out_len = 0;
 
-    if (mbedtls_md_hmac_finish(state, hash_value) != 0)
-        return srtp_err_status_auth_fail;
+        if (msg_octets < 0) {
+            return srtp_err_status_bad_param;
+        }
+
+        if (psa_mac_update(&state->op, message, (size_t)msg_octets) !=
+            PSA_SUCCESS) {
+            psa_mac_abort(&state->op);
+            return srtp_err_status_auth_fail;
+        }
+
+        if (psa_mac_sign_finish(&state->op, hash_value, sizeof(hash_value),
+                                &out_len) != PSA_SUCCESS) {
+            psa_mac_abort(&state->op);
+            return srtp_err_status_auth_fail;
+        }
+    }
+#else
+    {
+        mbedtls_md_context_t *state = (mbedtls_md_context_t *)statev;
+        /* hash message, copy output into H */
+        if (mbedtls_md_hmac_update(statev, message, msg_octets) != 0)
+            return srtp_err_status_auth_fail;
+
+        if (mbedtls_md_hmac_finish(state, hash_value) != 0)
+            return srtp_err_status_auth_fail;
+    }
+#endif
 
     /* copy hash_value to *result */
     for (i = 0; i < tag_len; i++) {
