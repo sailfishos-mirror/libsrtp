@@ -109,6 +109,8 @@ srtp_err_status_t srtp_test_empty_payload(void);
 srtp_err_status_t srtp_test_empty_payload_gcm(void);
 
 srtp_err_status_t srtp_test_short_packet_gcm_mki(void);
+
+srtp_err_status_t srtp_test_rtcp_gcm_not_encrypted(void);
 #endif
 
 srtp_err_status_t srtp_test_remove_stream(void);
@@ -957,6 +959,16 @@ int main(int argc, char *argv[])
             printf("failed\n");
             exit(1);
         }
+
+#ifdef GCM
+        printf("testing rtcp gcm not encrypted handling()...");
+        if (srtp_test_rtcp_gcm_not_encrypted() == srtp_err_status_ok) {
+            printf("passed\n");
+        } else {
+            printf("failed\n");
+            exit(1);
+        }
+#endif
     }
 
     if (do_stream_list) {
@@ -3931,6 +3943,53 @@ srtp_err_status_t srtp_validate_gcm_cryptex(void)
 
     CHECK_OK(srtp_dealloc(srtp_snd));
 
+    srtp_policy_destroy(policy);
+
+    return srtp_err_status_ok;
+}
+
+srtp_err_status_t srtp_test_rtcp_gcm_not_encrypted(void)
+{
+    /*
+     * An E=0 SRTCP packet is laid out as RTCP data, GCM tag, and trailer.
+     * The output only needs room for the RTCP data; the extra tag-sized area
+     * below is a guard that detects writes beyond the advertised capacity.
+     */
+    size_t rtcp_len = 28;
+    size_t tag_len = 16;
+    size_t trailer_len = 4;
+    size_t srtcp_len = rtcp_len + tag_len + trailer_len;
+    uint8_t srtcp[srtcp_len];
+    uint8_t rtcp[srtcp_len];
+
+    memset(srtcp, 0x0, sizeof(srtcp));
+    srtcp[0] = 0x80;
+    srtcp[1] = 0xc8;
+    srtcp[2] = 0;
+    srtcp[3] = (rtcp_len / sizeof(uint32_t)) - 1;
+    uint32_t trailer = htonl(1);
+    memcpy(srtcp + rtcp_len + tag_len, &trailer, sizeof(trailer));
+    // the tag area is deliberately filled with zeros, which is invalid for GCM
+
+    overrun_check_prepare(rtcp, 0, sizeof(rtcp));
+
+    srtp_policy_t policy;
+    srtp_t receiver;
+    CHECK_OK(srtp_policy_create(&policy));
+    CHECK_OK(srtp_policy_set_profile(policy, srtp_profile_aead_aes_128_gcm));
+    CHECK_OK(
+        srtp_policy_set_ssrc(policy, (srtp_ssrc_t){ ssrc_any_inbound, 0 }));
+    CHECK_OK(policy_set_key(policy, test_key_gcm));
+    CHECK_OK(srtp_create(&receiver, policy));
+
+    // incase rtcp_len is chnaged
+    size_t rtcp_overrun_len_start = rtcp_len;
+    CHECK_RETURN(
+        srtp_unprotect_rtcp(receiver, srtcp, srtcp_len, rtcp, &rtcp_len),
+        srtp_err_status_auth_fail);
+    CHECK_OVERRUN(rtcp, rtcp_overrun_len_start, sizeof(rtcp));
+
+    CHECK_OK(srtp_dealloc(receiver));
     srtp_policy_destroy(policy);
 
     return srtp_err_status_ok;

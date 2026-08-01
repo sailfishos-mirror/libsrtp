@@ -3979,11 +3979,6 @@ static srtp_err_status_t srtp_unprotect_rtcp_aead(
             return status;
         }
     } else {
-        /* if no encryption and not-inplace then need to copy rest of packet */
-        if (rtcp != srtcp) {
-            memcpy(rtcp + enc_start, srtcp + enc_start, enc_octet_len);
-        }
-
         /*
          * Still need to run the cipher to check the tag
          */
@@ -3992,6 +3987,12 @@ static srtp_err_status_t srtp_unprotect_rtcp_aead(
                                      tag_len, NULL, &tmp_len);
         if (status) {
             return status;
+        }
+
+        /* if no encryption and not-inplace then copy the authenticated data */
+        if (rtcp != srtcp) {
+            memcpy(rtcp + enc_start, srtcp + enc_start,
+                   enc_octet_len - tag_len);
         }
     }
 
