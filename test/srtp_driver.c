@@ -117,6 +117,16 @@ srtp_err_status_t srtp_test_remove_stream(void);
 
 srtp_err_status_t srtp_test_update(void);
 
+srtp_err_status_t srtp_test_update_preserves_direction(void);
+
+srtp_err_status_t srtp_test_inbound_direction(void);
+
+srtp_err_status_t srtp_test_outbound_direction(void);
+
+srtp_err_status_t srtp_test_template_inbound_direction(void);
+
+srtp_err_status_t srtp_test_template_outbound_direction(void);
+
 srtp_err_status_t srtp_test_update_mki(void);
 
 srtp_err_status_t srtp_test_protect_trailer_length(void);
@@ -858,6 +868,46 @@ int main(int argc, char *argv[])
          */
         printf("testing srtp_update()...");
         if (srtp_test_update() == srtp_err_status_ok) {
+            printf("passed\n");
+        } else {
+            printf("failed\n");
+            exit(1);
+        }
+
+        printf("testing srtp_update() stream direction preservation...");
+        if (srtp_test_update_preserves_direction() == srtp_err_status_ok) {
+            printf("passed\n");
+        } else {
+            printf("failed\n");
+            exit(1);
+        }
+
+        printf("testing inbound stream direction checks...");
+        if (srtp_test_inbound_direction() == srtp_err_status_ok) {
+            printf("passed\n");
+        } else {
+            printf("failed\n");
+            exit(1);
+        }
+
+        printf("testing outbound stream direction checks...");
+        if (srtp_test_outbound_direction() == srtp_err_status_ok) {
+            printf("passed\n");
+        } else {
+            printf("failed\n");
+            exit(1);
+        }
+
+        printf("testing inbound wildcard template stream direction checks...");
+        if (srtp_test_template_inbound_direction() == srtp_err_status_ok) {
+            printf("passed\n");
+        } else {
+            printf("failed\n");
+            exit(1);
+        }
+
+        printf("testing outbound wildcard template stream direction checks...");
+        if (srtp_test_template_outbound_direction() == srtp_err_status_ok) {
             printf("passed\n");
         } else {
             printf("failed\n");
@@ -4900,6 +4950,428 @@ srtp_err_status_t srtp_test_update(void)
         return status;
     }
 
+    srtp_policy_destroy(policy);
+
+    return srtp_err_status_ok;
+}
+
+static srtp_err_status_t create_direction_update_policy(srtp_policy_t *policy)
+{
+    CHECK_OK(srtp_policy_create(policy));
+    CHECK_OK(srtp_policy_set_profile(*policy, srtp_profile_aes128_cm_sha1_80));
+    CHECK_OK(policy_set_key(*policy, test_key));
+
+    return srtp_err_status_ok;
+}
+
+static srtp_err_status_t check_stream_direction(srtp_t session,
+                                                uint32_t ssrc,
+                                                direction_t expected_direction)
+{
+    srtp_stream_t stream = srtp_get_stream(session, htonl(ssrc));
+    CHECK(stream != NULL);
+    CHECK(stream->direction == expected_direction);
+
+    return srtp_err_status_ok;
+}
+
+static srtp_err_status_t protect_one_rtp(srtp_t session,
+                                         uint32_t ssrc,
+                                         uint16_t seq)
+{
+    size_t rtp_len;
+    uint8_t *rtp =
+        create_rtp_test_packet(32, ssrc, seq, 1, false, &rtp_len, NULL);
+    if (rtp == NULL) {
+        return srtp_err_status_alloc_fail;
+    }
+
+    CHECK_OK(call_srtp_protect(session, rtp, &rtp_len, 0));
+    free(rtp);
+
+    return srtp_err_status_ok;
+}
+
+static srtp_err_status_t protect_unprotect_one_rtp(srtp_t sender,
+                                                   srtp_t receiver,
+                                                   uint32_t ssrc,
+                                                   uint16_t seq)
+{
+    size_t rtp_len;
+    uint8_t *rtp =
+        create_rtp_test_packet(32, ssrc, seq, 1, false, &rtp_len, NULL);
+    if (rtp == NULL) {
+        return srtp_err_status_alloc_fail;
+    }
+
+    CHECK_OK(call_srtp_protect(sender, rtp, &rtp_len, 0));
+    CHECK_OK(call_srtp_unprotect(receiver, rtp, &rtp_len));
+    free(rtp);
+
+    return srtp_err_status_ok;
+}
+
+static srtp_err_status_t srtp_test_update_preserves_specific_inbound_direction(
+    void)
+{
+    const uint32_t ssrc = 0x12121212;
+    srtp_policy_t policy;
+    srtp_t session;
+    srtp_t sender_session;
+
+    CHECK_OK(create_direction_update_policy(&policy));
+    CHECK_OK(
+        srtp_policy_set_ssrc(policy, (srtp_ssrc_t){ ssrc_any_outbound, 0 }));
+    CHECK_OK(srtp_create(&sender_session, policy));
+    CHECK_OK(
+        srtp_policy_set_ssrc(policy, (srtp_ssrc_t){ ssrc_specific, ssrc }));
+    CHECK_OK(srtp_create(&session, policy));
+
+    CHECK_OK(protect_unprotect_one_rtp(sender_session, session, ssrc, 1));
+    CHECK_OK(check_stream_direction(session, ssrc, dir_srtp_receiver));
+    CHECK_OK(srtp_update(session, policy));
+    CHECK_OK(check_stream_direction(session, ssrc, dir_srtp_receiver));
+
+    CHECK_OK(srtp_dealloc(session));
+    CHECK_OK(srtp_dealloc(sender_session));
+    srtp_policy_destroy(policy);
+
+    return srtp_err_status_ok;
+}
+
+static srtp_err_status_t srtp_test_update_preserves_specific_outbound_direction(
+    void)
+{
+    const uint32_t ssrc = 0x12121212;
+    srtp_policy_t policy;
+    srtp_t session;
+
+    CHECK_OK(create_direction_update_policy(&policy));
+    CHECK_OK(
+        srtp_policy_set_ssrc(policy, (srtp_ssrc_t){ ssrc_specific, ssrc }));
+    CHECK_OK(srtp_create(&session, policy));
+
+    CHECK_OK(protect_one_rtp(session, ssrc, 2));
+    CHECK_OK(check_stream_direction(session, ssrc, dir_srtp_sender));
+    CHECK_OK(srtp_update(session, policy));
+    CHECK_OK(check_stream_direction(session, ssrc, dir_srtp_sender));
+
+    CHECK_OK(srtp_dealloc(session));
+    srtp_policy_destroy(policy);
+
+    return srtp_err_status_ok;
+}
+
+static srtp_err_status_t srtp_test_update_preserves_template_inbound_direction(
+    void)
+{
+    const uint32_t ssrc = 0x12121212;
+    srtp_policy_t policy;
+    srtp_t session;
+    srtp_t sender_session;
+
+    CHECK_OK(create_direction_update_policy(&policy));
+    CHECK_OK(
+        srtp_policy_set_ssrc(policy, (srtp_ssrc_t){ ssrc_any_outbound, 0 }));
+    CHECK_OK(srtp_create(&sender_session, policy));
+    CHECK_OK(
+        srtp_policy_set_ssrc(policy, (srtp_ssrc_t){ ssrc_any_inbound, 0 }));
+    CHECK_OK(srtp_create(&session, policy));
+
+    CHECK_OK(protect_unprotect_one_rtp(sender_session, session, ssrc, 3));
+    CHECK_OK(check_stream_direction(session, ssrc, dir_srtp_receiver));
+    CHECK_OK(srtp_update(session, policy));
+    CHECK(session->stream_template->direction == dir_srtp_receiver);
+    CHECK_OK(check_stream_direction(session, ssrc, dir_srtp_receiver));
+
+    CHECK_OK(
+        srtp_policy_set_ssrc(policy, (srtp_ssrc_t){ ssrc_any_outbound, 0 }));
+    CHECK_RETURN(srtp_update(session, policy), srtp_err_status_bad_param);
+    CHECK(session->stream_template->direction == dir_srtp_receiver);
+
+    CHECK_OK(srtp_dealloc(session));
+    CHECK_OK(srtp_dealloc(sender_session));
+    srtp_policy_destroy(policy);
+
+    return srtp_err_status_ok;
+}
+
+static srtp_err_status_t srtp_test_update_preserves_template_outbound_direction(
+    void)
+{
+    const uint32_t ssrc = 0x12121212;
+    srtp_policy_t policy;
+    srtp_t session;
+
+    CHECK_OK(create_direction_update_policy(&policy));
+    CHECK_OK(
+        srtp_policy_set_ssrc(policy, (srtp_ssrc_t){ ssrc_any_outbound, 0 }));
+    CHECK_OK(srtp_create(&session, policy));
+
+    CHECK_OK(protect_one_rtp(session, ssrc, 4));
+    CHECK_OK(check_stream_direction(session, ssrc, dir_srtp_sender));
+    CHECK_OK(srtp_update(session, policy));
+    CHECK(session->stream_template->direction == dir_srtp_sender);
+    CHECK_OK(check_stream_direction(session, ssrc, dir_srtp_sender));
+
+    CHECK_OK(
+        srtp_policy_set_ssrc(policy, (srtp_ssrc_t){ ssrc_any_inbound, 0 }));
+    CHECK_RETURN(srtp_update(session, policy), srtp_err_status_bad_param);
+    CHECK(session->stream_template->direction == dir_srtp_sender);
+
+    CHECK_OK(srtp_dealloc(session));
+    srtp_policy_destroy(policy);
+
+    return srtp_err_status_ok;
+}
+
+srtp_err_status_t srtp_test_update_preserves_direction(void)
+{
+    CHECK_OK(srtp_test_update_preserves_specific_inbound_direction());
+    CHECK_OK(srtp_test_update_preserves_specific_outbound_direction());
+    CHECK_OK(srtp_test_update_preserves_template_inbound_direction());
+    CHECK_OK(srtp_test_update_preserves_template_outbound_direction());
+
+    return srtp_err_status_ok;
+}
+
+srtp_err_status_t srtp_test_inbound_direction(void)
+{
+    const uint32_t ssrc = 0x12121212;
+    srtp_policy_t policy;
+    srtp_t inbound_session;
+    srtp_t sender_session;
+    uint8_t *rtp;
+    uint8_t *rtcp;
+    size_t rtp_len;
+    size_t rtcp_len;
+
+    CHECK_OK(srtp_policy_create(&policy));
+    CHECK_OK(srtp_policy_set_profile(policy, srtp_profile_aes128_cm_sha1_80));
+    CHECK_OK(policy_set_key(policy, test_key));
+
+    CHECK_OK(srtp_policy_set_ssrc(
+        policy, (srtp_ssrc_t){ ssrc_any_outbound, 0x12121212 }));
+    CHECK_OK(srtp_create(&sender_session, policy));
+
+    CHECK_OK(
+        srtp_policy_set_ssrc(policy, (srtp_ssrc_t){ ssrc_specific, ssrc }));
+    CHECK_OK(srtp_create(&inbound_session, policy));
+
+    rtp = create_rtp_test_packet(32, ssrc, 1, 1, false, &rtp_len, NULL);
+    if (rtp == NULL) {
+        return srtp_err_status_alloc_fail;
+    }
+    CHECK_OK(call_srtp_protect(sender_session, rtp, &rtp_len, 0));
+    CHECK_OK(call_srtp_unprotect(inbound_session, rtp, &rtp_len));
+    CHECK_RETURN(call_srtp_protect(inbound_session, rtp, &rtp_len, 0),
+                 srtp_err_status_direction_mismatch);
+    free(rtp);
+
+    rtcp = create_rtcp_test_packet(32, ssrc, &rtcp_len, NULL);
+    if (rtcp == NULL) {
+        return srtp_err_status_alloc_fail;
+    }
+    CHECK_OK(call_srtp_protect_rtcp(sender_session, rtcp, &rtcp_len, 0));
+    CHECK_OK(call_srtp_unprotect_rtcp(inbound_session, rtcp, &rtcp_len));
+    CHECK_RETURN(call_srtp_protect_rtcp(inbound_session, rtcp, &rtcp_len, 0),
+                 srtp_err_status_direction_mismatch);
+    free(rtcp);
+
+    CHECK_OK(srtp_dealloc(sender_session));
+    CHECK_OK(srtp_dealloc(inbound_session));
+    srtp_policy_destroy(policy);
+
+    return srtp_err_status_ok;
+}
+
+srtp_err_status_t srtp_test_outbound_direction(void)
+{
+    const uint32_t ssrc = 0x12121212;
+    srtp_policy_t policy;
+    srtp_t outbound_session;
+    srtp_t sender_session;
+    uint8_t *rtp;
+    uint8_t *rtcp;
+    size_t rtp_len;
+    size_t rtcp_len;
+
+    CHECK_OK(srtp_policy_create(&policy));
+    CHECK_OK(srtp_policy_set_profile(policy, srtp_profile_aes128_cm_sha1_80));
+    CHECK_OK(policy_set_key(policy, test_key));
+
+    CHECK_OK(
+        srtp_policy_set_ssrc(policy, (srtp_ssrc_t){ ssrc_any_outbound, 0 }));
+    CHECK_OK(srtp_create(&sender_session, policy));
+    CHECK_OK(
+        srtp_policy_set_ssrc(policy, (srtp_ssrc_t){ ssrc_specific, ssrc }));
+    CHECK_OK(srtp_create(&outbound_session, policy));
+
+    rtp = create_rtp_test_packet(32, ssrc, 2, 1, false, &rtp_len, NULL);
+    if (rtp == NULL) {
+        return srtp_err_status_alloc_fail;
+    }
+    CHECK_OK(call_srtp_protect(outbound_session, rtp, &rtp_len, 0));
+    free(rtp);
+
+    rtcp = create_rtcp_test_packet(32, ssrc, &rtcp_len, NULL);
+    if (rtcp == NULL) {
+        return srtp_err_status_alloc_fail;
+    }
+    CHECK_OK(call_srtp_protect_rtcp(outbound_session, rtcp, &rtcp_len, 0));
+    free(rtcp);
+
+    rtp = create_rtp_test_packet(32, ssrc, 3, 1, false, &rtp_len, NULL);
+    if (rtp == NULL) {
+        return srtp_err_status_alloc_fail;
+    }
+    CHECK_OK(call_srtp_protect(sender_session, rtp, &rtp_len, 0));
+    CHECK_RETURN(call_srtp_unprotect(outbound_session, rtp, &rtp_len),
+                 srtp_err_status_direction_mismatch);
+    free(rtp);
+
+    rtcp = create_rtcp_test_packet(32, ssrc, &rtcp_len, NULL);
+    if (rtcp == NULL) {
+        return srtp_err_status_alloc_fail;
+    }
+    CHECK_OK(call_srtp_protect_rtcp(sender_session, rtcp, &rtcp_len, 0));
+    CHECK_RETURN(call_srtp_unprotect_rtcp(outbound_session, rtcp, &rtcp_len),
+                 srtp_err_status_direction_mismatch);
+    free(rtcp);
+
+    CHECK_OK(srtp_dealloc(sender_session));
+    CHECK_OK(srtp_dealloc(outbound_session));
+    srtp_policy_destroy(policy);
+
+    return srtp_err_status_ok;
+}
+
+srtp_err_status_t srtp_test_template_inbound_direction(void)
+{
+    const uint32_t ssrc = 0x12121212;
+    srtp_policy_t policy;
+    srtp_t inbound_session;
+    srtp_t sender_session;
+    uint8_t *rtp;
+    uint8_t *rtcp;
+    size_t rtp_len;
+    size_t rtcp_len;
+
+    CHECK_OK(srtp_policy_create(&policy));
+    CHECK_OK(srtp_policy_set_profile(policy, srtp_profile_aes128_cm_sha1_80));
+    CHECK_OK(policy_set_key(policy, test_key));
+
+    CHECK_OK(
+        srtp_policy_set_ssrc(policy, (srtp_ssrc_t){ ssrc_any_outbound, 0 }));
+    CHECK_OK(srtp_create(&sender_session, policy));
+
+    CHECK_OK(
+        srtp_policy_set_ssrc(policy, (srtp_ssrc_t){ ssrc_any_inbound, 0 }));
+    CHECK_OK(srtp_create(&inbound_session, policy));
+
+    rtp = create_rtp_test_packet(32, ssrc, 1, 1, false, &rtp_len, NULL);
+    if (rtp == NULL) {
+        return srtp_err_status_alloc_fail;
+    }
+    CHECK_RETURN(call_srtp_protect(inbound_session, rtp, &rtp_len, 0),
+                 srtp_err_status_no_ctx);
+    free(rtp);
+
+    rtcp = create_rtcp_test_packet(32, ssrc, &rtcp_len, NULL);
+    if (rtcp == NULL) {
+        return srtp_err_status_alloc_fail;
+    }
+    CHECK_RETURN(call_srtp_protect_rtcp(inbound_session, rtcp, &rtcp_len, 0),
+                 srtp_err_status_no_ctx);
+    free(rtcp);
+
+    rtp = create_rtp_test_packet(32, ssrc, 2, 1, false, &rtp_len, NULL);
+    if (rtp == NULL) {
+        return srtp_err_status_alloc_fail;
+    }
+    CHECK_OK(call_srtp_protect(sender_session, rtp, &rtp_len, 0));
+    CHECK_OK(call_srtp_unprotect(inbound_session, rtp, &rtp_len));
+    CHECK_RETURN(call_srtp_protect(inbound_session, rtp, &rtp_len, 0),
+                 srtp_err_status_direction_mismatch);
+    free(rtp);
+
+    rtcp = create_rtcp_test_packet(32, ssrc, &rtcp_len, NULL);
+    if (rtcp == NULL) {
+        return srtp_err_status_alloc_fail;
+    }
+    CHECK_OK(call_srtp_protect_rtcp(sender_session, rtcp, &rtcp_len, 0));
+    CHECK_OK(call_srtp_unprotect_rtcp(inbound_session, rtcp, &rtcp_len));
+    CHECK_RETURN(call_srtp_protect_rtcp(inbound_session, rtcp, &rtcp_len, 0),
+                 srtp_err_status_direction_mismatch);
+    free(rtcp);
+
+    CHECK_OK(srtp_dealloc(sender_session));
+    CHECK_OK(srtp_dealloc(inbound_session));
+    srtp_policy_destroy(policy);
+
+    return srtp_err_status_ok;
+}
+
+srtp_err_status_t srtp_test_template_outbound_direction(void)
+{
+    const uint32_t ssrc = 0x12121212;
+    srtp_policy_t policy;
+    srtp_t outbound_session;
+    srtp_t sender_session;
+    uint8_t *rtp;
+    uint8_t *rtcp;
+    size_t rtp_len;
+    size_t rtcp_len;
+
+    CHECK_OK(srtp_policy_create(&policy));
+    CHECK_OK(srtp_policy_set_profile(policy, srtp_profile_aes128_cm_sha1_80));
+    CHECK_OK(policy_set_key(policy, test_key));
+
+    CHECK_OK(
+        srtp_policy_set_ssrc(policy, (srtp_ssrc_t){ ssrc_any_outbound, 0 }));
+    CHECK_OK(srtp_create(&sender_session, policy));
+    CHECK_OK(srtp_create(&outbound_session, policy));
+
+    rtp = create_rtp_test_packet(32, ssrc, 2, 1, false, &rtp_len, NULL);
+    if (rtp == NULL) {
+        return srtp_err_status_alloc_fail;
+    }
+    CHECK_OK(call_srtp_protect(sender_session, rtp, &rtp_len, 0));
+
+    CHECK_RETURN(call_srtp_unprotect(outbound_session, rtp, &rtp_len),
+                 srtp_err_status_no_ctx);
+    free(rtp);
+
+    rtcp = create_rtcp_test_packet(32, ssrc, &rtcp_len, NULL);
+    if (rtcp == NULL) {
+        return srtp_err_status_alloc_fail;
+    }
+    CHECK_OK(call_srtp_protect_rtcp(sender_session, rtcp, &rtcp_len, 0));
+
+    CHECK_RETURN(call_srtp_unprotect_rtcp(outbound_session, rtcp, &rtcp_len),
+                 srtp_err_status_no_ctx);
+    free(rtcp);
+
+    rtp = create_rtp_test_packet(32, ssrc, 3, 1, false, &rtp_len, NULL);
+    if (rtp == NULL) {
+        return srtp_err_status_alloc_fail;
+    }
+    CHECK_OK(call_srtp_protect(outbound_session, rtp, &rtp_len, 0));
+    CHECK_RETURN(call_srtp_unprotect(outbound_session, rtp, &rtp_len),
+                 srtp_err_status_direction_mismatch);
+    free(rtp);
+
+    rtcp = create_rtcp_test_packet(32, ssrc, &rtcp_len, NULL);
+    if (rtcp == NULL) {
+        return srtp_err_status_alloc_fail;
+    }
+    CHECK_OK(call_srtp_protect_rtcp(outbound_session, rtcp, &rtcp_len, 0));
+    CHECK_RETURN(call_srtp_unprotect_rtcp(outbound_session, rtcp, &rtcp_len),
+                 srtp_err_status_direction_mismatch);
+    free(rtcp);
+
+    CHECK_OK(srtp_dealloc(sender_session));
+    CHECK_OK(srtp_dealloc(outbound_session));
     srtp_policy_destroy(policy);
 
     return srtp_err_status_ok;
