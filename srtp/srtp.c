@@ -244,7 +244,7 @@ static srtp_err_status_t srtp_cryptex_unprotect_init(
     size_t *enc_start)
 {
     if (stream->use_cryptex && hdr->x == 1) {
-        uint16_t profile = srtp_get_rtp_hdr_xtnd_profile(hdr, rtp);
+        uint16_t profile = srtp_get_rtp_hdr_xtnd_profile(hdr, srtp);
         *inuse = profile == cryptex_one_byte_profile ||
                  profile == cryptex_two_byte_profile;
     } else {
@@ -255,7 +255,7 @@ static srtp_err_status_t srtp_cryptex_unprotect_init(
 
     if (*inuse) {
         *enc_start -=
-            (srtp_get_rtp_hdr_xtnd_len(hdr, rtp) - octets_in_rtp_xtn_hdr);
+            (srtp_get_rtp_hdr_xtnd_len(hdr, srtp) - octets_in_rtp_xtn_hdr);
         if (*inplace) {
             *enc_start -= (hdr->cc * 4);
         }

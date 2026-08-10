@@ -145,6 +145,7 @@ srtp_err_status_t srtp_test_set_sender_roc(void);
 
 srtp_err_status_t srtp_test_cryptex_csrc_but_no_extension_header(void);
 srtp_err_status_t srtp_test_cryptex_disable(void);
+srtp_err_status_t srtp_test_cryptex_not_in_place_distinct_buffer(void);
 
 srtp_err_status_t srtp_test_missing_session_keys(void);
 
@@ -996,6 +997,15 @@ int main(int argc, char *argv[])
 
         printf("testing cryptex_disable()...");
         if (srtp_test_cryptex_disable() == srtp_err_status_ok) {
+            printf("passed\n");
+        } else {
+            printf("failed\n");
+            exit(1);
+        }
+
+        printf("testing cryptex_not_in_place_distinct_buffer()...");
+        if (srtp_test_cryptex_not_in_place_distinct_buffer() ==
+            srtp_err_status_ok) {
             printf("passed\n");
         } else {
             printf("failed\n");
@@ -3376,6 +3386,91 @@ srtp_err_status_t srtp_validate_cryptex(void)
         CHECK_OK(srtp_dealloc(srtp_recv));
     }
 
+    srtp_policy_destroy(policy);
+
+    return srtp_err_status_ok;
+}
+
+/*
+ * srtp_test_cryptex_not_in_place_distinct_buffer() unprotects a Cryptex
+ * (RFC 9335) packet using the not-in-place form of the API, with an output
+ * buffer that is genuinely distinct from the input buffer and does not
+ * already contain a copy of the ciphertext.
+ *
+ * srtp_unprotect() documents that rtp "can be the same as srtp to support
+ * in-place io", so a separate buffer is a supported calling mode. The
+ * existing not-in-place coverage in this driver copies the packet into a
+ * scratch input buffer and passes the original packet buffer as the output,
+ * so the output buffer happens to hold the ciphertext already. That masks
+ * any read of the header extension from the output buffer instead of the
+ * input buffer.
+ */
+srtp_err_status_t srtp_test_cryptex_not_in_place_distinct_buffer(void)
+{
+    // clang-format off
+    /* Plaintext packet with 1-byte header extension */
+    const char *plaintext_ref =
+        "900f1235"
+        "decafbad"
+        "cafebabe"
+        "bede0001"
+        "51000200"
+        "abababab"
+        "abababab"
+        "abababab"
+        "abababab";
+
+    /* AES-CTR/HMAC-SHA1 Cryptex ciphertext of the packet above */
+    const char *ciphertext_ref =
+        "900f1235"
+        "decafbad"
+        "cafebabe"
+        "c0de0001"
+        "eb923652"
+        "51c3e036"
+        "f8de27e9"
+        "c27ee3e0"
+        "b4651d9f"
+        "bc4218a7"
+        "0244522f"
+        "34a5";
+    // clang-format on
+
+    srtp_t srtp_recv;
+    srtp_policy_t policy;
+    uint8_t reference[1400];
+    uint8_t ciphertext[1400];
+    uint8_t output[1400];
+    size_t ref_len, enc_len, out_len;
+
+    ref_len = hex_string_to_octet_string(reference, plaintext_ref,
+                                        sizeof(reference)) /
+              2;
+    enc_len = hex_string_to_octet_string(ciphertext, ciphertext_ref,
+                                         sizeof(ciphertext)) /
+              2;
+
+    CHECK_OK(srtp_policy_create(&policy));
+    CHECK_OK(srtp_policy_set_profile(policy, srtp_profile_aes128_cm_sha1_80));
+    CHECK_OK(srtp_policy_set_ssrc(policy,
+                                  (srtp_ssrc_t){ ssrc_specific, 0xcafebabe }));
+    CHECK_OK(policy_set_key(policy, test_key));
+    CHECK_OK(srtp_policy_set_cryptex(policy, true));
+
+    CHECK_OK(srtp_create(&srtp_recv, policy));
+
+    /*
+     * The output buffer is deliberately not seeded with the ciphertext. A
+     * caller that hands libsrtp a fresh output buffer is doing nothing wrong.
+     */
+    memset(output, 0, sizeof(output));
+    out_len = sizeof(output);
+
+    CHECK_OK(srtp_unprotect(srtp_recv, ciphertext, enc_len, output, &out_len));
+    CHECK(out_len == ref_len);
+    CHECK_BUFFER_EQUAL(output, reference, ref_len);
+
+    CHECK_OK(srtp_dealloc(srtp_recv));
     srtp_policy_destroy(policy);
 
     return srtp_err_status_ok;
