@@ -3444,7 +3444,7 @@ srtp_err_status_t srtp_test_cryptex_not_in_place_distinct_buffer(void)
     size_t ref_len, enc_len, out_len;
 
     ref_len = hex_string_to_octet_string(reference, plaintext_ref,
-                                        sizeof(reference)) /
+                                         sizeof(reference)) /
               2;
     enc_len = hex_string_to_octet_string(ciphertext, ciphertext_ref,
                                          sizeof(ciphertext)) /
